@@ -1,0 +1,44 @@
+{
+  "ABSOLUTE_CINEMA": {
+    "title": "ABSOLUTE CINEMA",
+    "meme_path": "assets/default/absolute_cinema.png",
+    "audio_path": "assets/default/dramatic_hit.wav",
+    "accent_color": "#F59E0B"
+  },
+  "ERM_ACTUALLY": {
+    "title": "ERM, ACTUALLY...",
+    "meme_path": "assets/default/erm_actually.png",
+    "audio_path": "assets/default/erm_actually.wav",
+    "accent_color": "#84CC16"
+  },
+  "THINKING": {
+    "title": "HMMM... THINKING",
+    "meme_path": "assets/default/thinking.png",
+    "audio_path": "assets/default/anime_chime.wav",
+    "accent_color": "#A855F7"
+  },
+  "SHOCKED": {
+    "title": "WHAT?! SHOCKED",
+    "meme_path": "assets/default/shocked.png",
+    "audio_path": "assets/default/vine_boom.wav",
+    "accent_color": "#EF4444"
+  },
+  "DOMAIN_EXPANSION": {
+    "title": "DOMAIN EXPANSION",
+    "meme_path": "assets/default/domain_expansion.png",
+    "audio_path": "assets/default/domain_pulse.wav",
+    "accent_color": "#C026D3"
+  },
+  "PEACE_SIGN": {
+    "title": "PEACE OUT!",
+    "meme_path": "assets/default/peace_sign.png",
+    "audio_path": "assets/default/peace_chime.wav",
+    "accent_color": "#06B6D4"
+  },
+  "NEUTRAL": {
+    "title": "WAITING FOR POSE...",
+    "meme_path": "assets/default/neutral.png",
+    "audio_path": null,
+    "accent_color": "#64748B"
+  }
+}

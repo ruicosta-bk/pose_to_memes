@@ -1,0 +1,10 @@
+PySide6>=6.6.0
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+numpy>=1.26.0
+Pillow>=10.0.0
+pygame>=2.5.0
+pytest>=8.0.0
+
+# Optional: Virtual camera output for OBS / Discord
+# pyvirtualcam>=0.11.0
