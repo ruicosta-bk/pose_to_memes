@@ -1,4 +1,4 @@
-"""Tier 1 rule-based geometric detectors for built-in meme poses."""
+"""Tier 1 rule-based geometric and blendshape detectors for built-in meme poses."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ BUILTIN_POSES: tuple[str, ...] = (
     "SHOCKED",
     "DOMAIN_EXPANSION",
     "PEACE_SIGN",
+    "SIGMA_RIZZ",
 )
 
 MIN_RULE_CONFIDENCE = 0.35
@@ -108,6 +109,17 @@ def _valid_hands(hands: Optional[list[tuple[str, np.ndarray]]]) -> list[np.ndarr
         if h.ndim == 2 and h.shape[0] >= 21 and h.shape[1] >= 2 and np.all(np.isfinite(h[:21, :2])):
             out.append(h[:21, :2])
     return out
+
+
+def _valid_face(face: Optional[np.ndarray], min_points: int = 292) -> Optional[np.ndarray]:
+    if face is None:
+        return None
+    arr = np.asarray(face, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[0] < min_points or arr.shape[1] < 2:
+        return None
+    if not np.all(np.isfinite(arr[:min_points, :2])):
+        return None
+    return arr
 
 
 def _finger_extended_score(hand: np.ndarray, mcp: int, pip: int, dip: int, tip: int) -> float:
@@ -235,11 +247,7 @@ def detect_thinking(
     targets: list[np.ndarray] = []
     scale = 0.0
 
-    face_arr = None
-    if face is not None:
-        cand = np.asarray(face, dtype=np.float32)
-        if cand.ndim == 2 and cand.shape[0] >= 292 and cand.shape[1] >= 2 and np.all(np.isfinite(cand[:292, :2])):
-            face_arr = cand
+    face_arr = _valid_face(face, 292)
 
     if face_arr is not None:
         mouth_c = (face_arr[13, :2] + face_arr[14, :2]) * 0.5
@@ -301,29 +309,118 @@ def detect_shocked(
     pose: Optional[np.ndarray],
     hands: Optional[list[tuple[str, np.ndarray]]] = None,
     face: Optional[np.ndarray] = None,
+    face_blendshapes: Optional[dict[str, float]] = None,
 ) -> float:
-    """Large Mouth Aspect Ratio (MAR = inner lip vertical / mouth width)."""
-    if face is None:
-        return 0.0
-    arr = np.asarray(face, dtype=np.float32)
-    if arr.ndim != 2 or arr.shape[0] < 292 or arr.shape[1] < 2:
-        return 0.0
-    if not np.all(np.isfinite(arr[:292, :2])):
-        return 0.0
+    """Large Mouth Aspect Ratio (MAR) optionally combined with jawOpen/eyeWide/browInnerUp."""
+    mar_score = 0.0
+    arr = _valid_face(face, 292)
+    if arr is not None:
+        vertical = _dist(arr[13, :2], arr[14, :2])
+        w_inner = (
+            _dist(arr[78, :2], arr[308, :2])
+            if arr.shape[0] >= 309 and np.all(np.isfinite(arr[[78, 308], :2]))
+            else 0.0
+        )
+        w_outer = _dist(arr[61, :2], arr[291, :2])
+        width = w_inner if w_inner > 1e-4 else w_outer
+        if width >= 1e-5:
+            mar = vertical / width
+            mar_score = _ramp_up(mar, 0.22, 0.55)
 
-    vertical = _dist(arr[13, :2], arr[14, :2])
-    w_inner = (
-        _dist(arr[78, :2], arr[308, :2])
-        if arr.shape[0] >= 309 and np.all(np.isfinite(arr[[78, 308], :2]))
-        else 0.0
+    if not face_blendshapes:
+        return mar_score
+
+    jaw_open = float(face_blendshapes.get("jawOpen", 0.0))
+    eye_wide = 0.5 * (
+        float(face_blendshapes.get("eyeWideLeft", 0.0))
+        + float(face_blendshapes.get("eyeWideRight", 0.0))
     )
-    w_outer = _dist(arr[61, :2], arr[291, :2])
-    width = w_inner if w_inner > 1e-4 else w_outer
-    if width < 1e-5:
+    brow_up = float(face_blendshapes.get("browInnerUp", 0.0))
+
+    jaw_score = _ramp_up(jaw_open, 0.25, 0.65)
+    surprise_expr = 0.55 * _ramp_up(eye_wide, 0.15, 0.55) + 0.45 * _ramp_up(brow_up, 0.15, 0.55)
+    bs_score = float(np.clip(0.70 * jaw_score + 0.30 * surprise_expr, 0.0, 1.0))
+
+    if mar_score > 0.1 and bs_score > 0.1:
+        return float(np.clip(0.4 * mar_score + 0.6 * bs_score, 0.0, 1.0))
+    return float(np.clip(max(mar_score, bs_score), 0.0, 1.0))
+
+
+def detect_sigma_rizz(
+    pose: Optional[np.ndarray],
+    hands: Optional[list[tuple[str, np.ndarray]]] = None,
+    face: Optional[np.ndarray] = None,
+    face_blendshapes: Optional[dict[str, float]] = None,
+) -> float:
+    """Detect Sigma/Rizz expression via ARKit blendshapes with FaceMesh landmark fallback."""
+    if face_blendshapes:
+        jaw_open = float(face_blendshapes.get("jawOpen", 0.0))
+        if jaw_open >= 0.35:
+            return 0.0
+
+        pucker = max(
+            float(face_blendshapes.get("mouthPucker", 0.0)),
+            float(face_blendshapes.get("mouthFunnel", 0.0)) * 0.85,
+            0.45
+            * (
+                float(face_blendshapes.get("mouthPressLeft", 0.0))
+                + float(face_blendshapes.get("mouthPressRight", 0.0))
+            ),
+        )
+        squint = 0.5 * (
+            float(face_blendshapes.get("eyeSquintLeft", 0.0))
+            + float(face_blendshapes.get("eyeSquintRight", 0.0))
+        )
+        brow_l = float(face_blendshapes.get("browOuterUpLeft", 0.0))
+        brow_r = float(face_blendshapes.get("browOuterUpRight", 0.0))
+        brow_signal = min(1.0, 0.75 * max(brow_l, brow_r) + 0.35 * abs(brow_l - brow_r))
+
+        mouth_score = _ramp_up(pucker, 0.18, 0.48)
+        squint_score = _ramp_up(squint, 0.15, 0.45)
+        brow_score = _ramp_up(brow_signal, 0.15, 0.45)
+
+        if mouth_score <= 0.15 or (squint_score <= 0.15 and brow_score <= 0.15):
+            return 0.0
+
+        jaw_gate = _ramp_down(jaw_open, 0.25, 0.35)
+        raw = (0.42 * mouth_score + 0.33 * squint_score + 0.25 * brow_score) * jaw_gate
+        return float(np.clip(raw, 0.0, 1.0))
+
+    # Landmark fallback when face_blendshapes is None.
+    arr = _valid_face(face, 387)
+    if arr is None:
         return 0.0
 
-    mar = vertical / width
-    return _ramp_up(mar, 0.22, 0.55)
+    inter_ocular = _dist(arr[33, :2], arr[263, :2])
+    w_l = _dist(arr[33, :2], arr[133, :2])
+    w_r = _dist(arr[362, :2], arr[263, :2])
+    mouth_w = _dist(arr[61, :2], arr[291, :2])
+    if inter_ocular < 1e-5 or w_l < 1e-5 or w_r < 1e-5 or mouth_w < 1e-5:
+        return 0.0
+
+    mar = _dist(arr[13, :2], arr[14, :2]) / mouth_w
+    if mar >= 0.35:
+        return 0.0
+    mar_gate = _ramp_down(mar, 0.18, 0.35)
+
+    ear_l = _dist(arr[159, :2], arr[145, :2]) / w_l
+    ear_r = _dist(arr[386, :2], arr[374, :2]) / w_r
+    squint_score = _ramp_down(0.5 * (ear_l + ear_r), 0.18, 0.28)
+
+    brow_l = float(arr[159, 1] - arr[105, 1]) / inter_ocular
+    brow_r = float(arr[386, 1] - arr[334, 1]) / inter_ocular
+    brow_asym = abs(brow_l - brow_r)
+    brow_raise = max(brow_l, brow_r)
+    brow_score = max(_ramp_up(brow_asym, 0.04, 0.10), _ramp_up(brow_raise, 0.16, 0.24))
+
+    mouth_ratio = mouth_w / inter_ocular
+    pucker_score = _ramp_down(mouth_ratio, 0.40, 0.52)
+
+    if pucker_score <= 0.15 or (squint_score <= 0.15 and brow_score <= 0.15):
+        return 0.0
+
+    raw = (0.42 * pucker_score + 0.33 * squint_score + 0.25 * brow_score) * mar_gate
+    return float(np.clip(raw, 0.0, 1.0))
 
 
 def detect_domain_expansion(
@@ -422,8 +519,9 @@ def classify_builtin(
     pose: Optional[np.ndarray],
     hands: Optional[list[tuple[str, np.ndarray]]] = None,
     face: Optional[np.ndarray] = None,
+    face_blendshapes: Optional[dict[str, float]] = None,
 ) -> tuple[Optional[str], float, dict[str, float]]:
-    """Evaluate all 6 built-in geometric meme poses.
+    """Evaluate all built-in geometric and blendshape meme poses.
 
     Returns ``(best_pose, best_confidence, scores_by_pose)``. ``best_pose`` is
     ``None`` when no pose reaches ``MIN_RULE_CONFIDENCE``.
@@ -438,9 +536,10 @@ def classify_builtin(
         "ABSOLUTE_CINEMA": detect_absolute_cinema(pose, hands, face),
         "ERM_ACTUALLY": detect_erm_actually(pose, hands, face),
         "THINKING": thinking_score,
-        "SHOCKED": detect_shocked(pose, hands, face),
+        "SHOCKED": detect_shocked(pose, hands, face, face_blendshapes=face_blendshapes),
         "DOMAIN_EXPANSION": domain_score,
         "PEACE_SIGN": detect_peace_sign(pose, hands, face),
+        "SIGMA_RIZZ": detect_sigma_rizz(pose, hands, face, face_blendshapes=face_blendshapes),
     }
 
     best_pose = max(scores, key=scores.__getitem__)

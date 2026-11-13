@@ -795,7 +795,8 @@ class MainWindow(QMainWindow):
         for entry in self.custom_store.list_poses():
             media_tag = Path(entry.meme_path).name if entry.meme_path else "No media"
             audio_tag = Path(entry.audio_path).name if entry.audio_path else "No SFX"
-            item = QListWidgetItem(f"[CUSTOM]    {entry.name}  ({media_tag} | {audio_tag})")
+            kind_tag = "[CUSTOM+FACE]" if getattr(entry, "include_face", False) else "[CUSTOM]    "
+            item = QListWidgetItem(f"{kind_tag} {entry.name}  ({media_tag} | {audio_tag})")
             item.setData(ROLE_POSE_ID, entry.id)
             item.setData(ROLE_IS_CUSTOM, True)
             self._pose_list.addItem(item)

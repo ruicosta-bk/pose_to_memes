@@ -7,12 +7,14 @@ import pytest
 
 from classifier import (
     BUILTIN_POSES,
+    FACE_VECTOR_DIM,
     POSE_VECTOR_DIM,
     CustomPoseEntry,
     CustomPoseStore,
     TemporalStabilizer,
     classify_builtin,
     cosine_similarity,
+    extract_face_blendshape_vector,
     extract_pose_vector,
 )
 
@@ -76,6 +78,9 @@ def make_neutral_face(
     mouth_y: float = 0.324,
     mouth_w: float = 0.08,
     mar: float = 0.05,
+    eye_ear: float = 0.34,
+    left_brow_lift: float = 0.012,
+    right_brow_lift: float = 0.012,
 ) -> np.ndarray:
     """Create a synthetic (478, 3) MediaPipe FaceMesh array."""
     face = np.zeros((478, 3), dtype=np.float32)
@@ -92,6 +97,21 @@ def make_neutral_face(
     face[13, :2] = [cx, mouth_y - half_h]
     face[14, :2] = [cx, mouth_y + half_h]
     face[152, :2] = [cx, mouth_y + mouth_w * 0.70]  # chin
+
+    # Eyes & brows (inter-ocular outer corners 33..263 = 0.14)
+    eye_y = mouth_y - 0.065
+    eye_w = 0.036
+    face[33, :2] = [cx - 0.07, eye_y]
+    face[133, :2] = [cx - 0.07 + eye_w, eye_y]
+    face[159, :2] = [cx - 0.07 + eye_w * 0.5, eye_y - eye_ear * eye_w * 0.5]
+    face[145, :2] = [cx - 0.07 + eye_w * 0.5, eye_y + eye_ear * eye_w * 0.5]
+    face[105, :2] = [cx - 0.07 + eye_w * 0.5, face[159, 1] - left_brow_lift]
+
+    face[263, :2] = [cx + 0.07, eye_y]
+    face[362, :2] = [cx + 0.07 - eye_w, eye_y]
+    face[386, :2] = [cx + 0.07 - eye_w * 0.5, eye_y - eye_ear * eye_w * 0.5]
+    face[374, :2] = [cx + 0.07 - eye_w * 0.5, eye_y + eye_ear * eye_w * 0.5]
+    face[334, :2] = [cx + 0.07 - eye_w * 0.5, face[386, 1] - right_brow_lift]
     return face
 
 
@@ -212,6 +232,15 @@ def build_pose_sample(pose_name: str):
         hands = [("Left", h_l), ("Right", h_r)]
     elif pose_name == "PEACE_SIGN":
         hands = [("Right", make_hand(wrist_xy=(0.35, 0.40), extended=(False, True, True, False, False), v_spread_deg=35.0))]
+    elif pose_name == "SIGMA_RIZZ":
+        # Narrow pursed mouth, squinted eyes, asymmetric raised brow (landmark fallback)
+        face = make_neutral_face(
+            mouth_w=0.050,
+            mar=0.05,
+            eye_ear=0.14,
+            left_brow_lift=0.030,
+            right_brow_lift=0.010,
+        )
     elif pose_name == "NEUTRAL":
         pass
     else:
@@ -427,3 +456,128 @@ def test_temporal_stabilizer_with_custom_pose(tmp_path) -> None:
     assert r1.triggered_pose == entry.id
     assert r1.is_custom is True
     assert r1.custom_entry is not None and r1.custom_entry.id == entry.id
+
+
+def test_face_blendshapes_sigma_rizz_and_shocked() -> None:
+    neutral_pose = make_neutral_pose()
+    neutral_face = make_neutral_face()
+
+    # Neutral resting blendshapes -> None vector and no built-in trigger
+    resting_bs = {"mouthPucker": 0.03, "eyeSquintLeft": 0.02, "jawOpen": 0.02}
+    assert extract_face_blendshape_vector(None) is None
+    assert extract_face_blendshape_vector(resting_bs) is None
+    best_rest, conf_rest, _ = classify_builtin(neutral_pose, None, neutral_face, face_blendshapes=resting_bs)
+    assert best_rest is None
+    assert conf_rest < 0.35
+
+    # SIGMA_RIZZ via blendshapes
+    rizz_bs = {
+        "mouthPucker": 0.68,
+        "eyeSquintLeft": 0.55,
+        "eyeSquintRight": 0.50,
+        "browOuterUpLeft": 0.62,
+        "browOuterUpRight": 0.12,
+        "jawOpen": 0.05,
+    }
+    vec = extract_face_blendshape_vector(rizz_bs)
+    assert vec is not None
+    assert vec.shape == (FACE_VECTOR_DIM,)
+    assert vec.dtype == np.float32
+    assert np.isclose(np.linalg.norm(vec), 1.0, atol=1e-5)
+
+    best_rizz, conf_rizz, scores_rizz = classify_builtin(
+        neutral_pose, None, neutral_face, face_blendshapes=rizz_bs
+    )
+    assert best_rizz == "SIGMA_RIZZ"
+    assert conf_rizz >= 0.72
+    assert scores_rizz["SHOCKED"] < 0.35
+
+    # SHOCKED via blendshapes must not collide with SIGMA_RIZZ (jawOpen >= 0.35 gates SIGMA_RIZZ to 0)
+    shocked_bs = {
+        "jawOpen": 0.78,
+        "eyeWideLeft": 0.65,
+        "eyeWideRight": 0.62,
+        "browInnerUp": 0.58,
+        "mouthPucker": 0.40,
+    }
+    best_shock, conf_shock, scores_shock = classify_builtin(
+        neutral_pose, None, make_neutral_face(mar=0.60), face_blendshapes=shocked_bs
+    )
+    assert best_shock == "SHOCKED"
+    assert conf_shock >= 0.72
+    assert scores_shock["SIGMA_RIZZ"] == 0.0
+
+
+def test_custom_face_expression_store_and_stabilizer(tmp_path) -> None:
+    store_path = tmp_path / "custom_face_poses.json"
+    store = CustomPoseStore(store_path)
+
+    face_only_bs = {"mouthSmileLeft": 0.85, "mouthSmileRight": 0.82, "cheekSquintLeft": 0.45}
+    face_vec = extract_face_blendshape_vector(face_only_bs)
+    assert face_vec is not None
+
+    entry = store.add_pose(
+        "Smug Face",
+        vector=[],
+        meme_path="assets/memes/smug.png",
+        threshold=0.88,
+        pose_id="CUSTOM_SMUG",
+        include_face=True,
+        face_vector=face_vec,
+    )
+    assert entry.include_face is True
+    assert entry.face_vector is not None and len(entry.face_vector) == FACE_VECTOR_DIM
+
+    # Reload from disk and verify backward-compatible JSON persistence
+    reloaded = CustomPoseStore(store_path)
+    loaded_entry = reloaded.get_pose("CUSTOM_SMUG")
+    assert loaded_entry is not None
+    assert loaded_entry.include_face is True
+    assert loaded_entry.vector == []
+
+    # Matching requires face_vector when include_face=True
+    assert reloaded.match(None, face_vector=None)[0] is None
+    matched, sim = reloaded.match(None, face_vector=face_vec)
+    assert matched is not None and matched.id == "CUSTOM_SMUG" and sim > 0.99
+
+    # TemporalStabilizer triggers face-only custom expression deterministically
+    stabilizer = TemporalStabilizer(custom_store=reloaded, hold_ms=250, cooldown_ms=800)
+    r0 = stabilizer.update(None, None, None, timestamp_ms=100, face_blendshapes=face_only_bs)
+    assert r0.active_pose is None
+    assert r0.candidate_pose == "CUSTOM_SMUG"
+    r1 = stabilizer.update(None, None, None, timestamp_ms=360, face_blendshapes=face_only_bs)
+    assert r1.active_pose == "CUSTOM_SMUG"
+    assert r1.triggered_pose == "CUSTOM_SMUG"
+    assert r1.is_custom is True
+
+    # Combined body + face custom pose entry + process_detection()
+    pose_combo, hands_combo, _ = build_pose_sample("PEACE_SIGN")
+    body_vec = extract_pose_vector(pose_combo, hands_combo)
+    assert body_vec is not None
+    combo_bs = {"mouthSmileLeft": 0.65, "eyeSquintRight": 0.60, "jawOpen": 0.05}
+    combo_face_vec = extract_face_blendshape_vector(combo_bs)
+    assert combo_face_vec is not None
+    reloaded.add_pose(
+        "Wink Peace",
+        vector=body_vec,
+        threshold=0.88,
+        pose_id="CUSTOM_WINK_PEACE",
+        include_face=True,
+        face_vector=combo_face_vec,
+    )
+    matched_combo, sim_combo = reloaded.match(body_vec, face_vector=combo_face_vec)
+    assert matched_combo is not None and matched_combo.id == "CUSTOM_WINK_PEACE" and sim_combo > 0.99
+
+    class _Det:
+        def __init__(self, pose, hands, face, face_blendshapes, timestamp_ms):
+            self.pose = pose
+            self.hands = hands
+            self.face = face
+            self.face_blendshapes = face_blendshapes
+            self.timestamp_ms = timestamp_ms
+
+    stab2 = TemporalStabilizer(custom_store=reloaded, hold_ms=250, cooldown_ms=800)
+    stab2.process_detection(_Det(pose_combo, hands_combo, None, combo_bs, 1000))
+    res_combo = stab2.process_detection(_Det(pose_combo, hands_combo, None, combo_bs, 1260))
+    assert res_combo.active_pose == "CUSTOM_WINK_PEACE"
+    assert res_combo.triggered_pose == "CUSTOM_WINK_PEACE"

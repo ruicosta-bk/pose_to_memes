@@ -11,6 +11,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -24,7 +25,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from classifier import CustomPoseEntry, extract_pose_vector
+from classifier import (
+    CustomPoseEntry,
+    extract_face_blendshape_vector,
+    extract_pose_vector,
+)
 from vision import draw_neon_hud
 
 
@@ -63,6 +68,7 @@ class RecorderDialog(QDialog):
         self._phase: str = "idle"  # "idle" | "countdown" | "capturing"
         self._elapsed_ms: int = 0
         self._captured_vectors: list[np.ndarray] = []
+        self._captured_face_vectors: list[np.ndarray] = []
         self._last_detection: Any = None
         self.recorded_entry: Optional[CustomPoseEntry] = None
 
@@ -148,6 +154,10 @@ class RecorderDialog(QDialog):
         self._threshold_spin.setValue(0.88)
         form.addRow("Match Threshold:", self._threshold_spin)
 
+        self._include_face_chk = QCheckBox("Include Face Expression (Blendshapes)", form_card)
+        self._include_face_chk.setChecked(False)
+        form.addRow("", self._include_face_chk)
+
         root.addWidget(form_card)
 
         # Action buttons
@@ -208,6 +218,22 @@ class RecorderDialog(QDialog):
                 color: #f8fafc;
             }
             QLineEdit:focus, QDoubleSpinBox:focus {
+                border-color: #22d3ee;
+            }
+            QCheckBox {
+                spacing: 7px;
+                color: #cbd5e1;
+                font-weight: 600;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid #475569;
+                background-color: #1e293b;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #22d3ee;
                 border-color: #22d3ee;
             }
             QPushButton {
@@ -273,6 +299,7 @@ class RecorderDialog(QDialog):
 
         self.recorded_entry = None
         self._captured_vectors.clear()
+        self._captured_face_vectors.clear()
         self._elapsed_ms = 0
         self._phase = "countdown"
         self._start_btn.setEnabled(False)
@@ -292,6 +319,7 @@ class RecorderDialog(QDialog):
                 self._phase = "capturing"
                 self._elapsed_ms = 0
                 self._captured_vectors.clear()
+                self._captured_face_vectors.clear()
                 if self._last_detection is not None:
                     self.feed_detection(self._last_detection)
                 self._set_status("CAPTURING! Hold still...", "#22d3ee")
@@ -310,6 +338,12 @@ class RecorderDialog(QDialog):
         if vec is not None and np.linalg.norm(vec) > 1e-6:
             self._captured_vectors.append(vec)
 
+        if self._include_face_chk.isChecked():
+            blendshapes = getattr(detection, "face_blendshapes", None)
+            face_vec = extract_face_blendshape_vector(blendshapes)
+            if face_vec is not None and np.linalg.norm(face_vec) > 1e-6:
+                self._captured_face_vectors.append(face_vec)
+
     def on_frame(self, frame_bgr: np.ndarray, detection: Any, _fps: float = 0.0) -> None:
         """Receive live webcam frame + detection from MainWindow/CameraTracker."""
         self.feed_detection(detection)
@@ -324,7 +358,12 @@ class RecorderDialog(QDialog):
             overlay_text = f"{rem}..."
             overlay_color = (60, 190, 255)
         elif self._phase == "capturing":
-            overlay_text = f"CAPTURING ({len(self._captured_vectors)})"
+            if self._include_face_chk.isChecked():
+                overlay_text = (
+                    f"CAPTURING (B:{len(self._captured_vectors)} F:{len(self._captured_face_vectors)})"
+                )
+            else:
+                overlay_text = f"CAPTURING ({len(self._captured_vectors)})"
             overlay_color = (238, 211, 34)
 
         if overlay_text:
@@ -359,34 +398,55 @@ class RecorderDialog(QDialog):
         self._phase = "idle"
         self._start_btn.setEnabled(True)
 
+        include_face = self._include_face_chk.isChecked()
         entry = self.build_entry_from_captured()
         if entry is None:
-            self._set_status(
-                "Capture failed: no valid pose detected. Ensure shoulders are visible and try again.",
-                "#f87171",
-            )
+            if include_face and not self._captured_face_vectors:
+                self._set_status(
+                    "Capture failed: no facial expression/blendshapes detected. "
+                    "Express clearly facing the camera and try again.",
+                    "#f87171",
+                )
+            else:
+                self._set_status(
+                    "Capture failed: no valid pose detected. Ensure shoulders are visible and try again.",
+                    "#f87171",
+                )
             return
 
         self.recorded_entry = entry
+        sample_count = max(len(self._captured_vectors), len(self._captured_face_vectors))
         self._set_status(
-            f"Captured '{entry.name}' ({len(self._captured_vectors)} samples)!",
+            f"Captured '{entry.name}' ({sample_count} samples)!",
             "#4ade80",
         )
         self.pose_recorded.emit(entry)
         self.accept()
 
-    def build_entry_from_captured(self) -> Optional[CustomPoseEntry]:
-        """Average and L2-normalize captured pose vectors into a CustomPoseEntry."""
-        if not self._captured_vectors:
+    @staticmethod
+    def _average_and_normalize(vectors: list[np.ndarray]) -> Optional[list[float]]:
+        if not vectors:
             return None
-
-        stacked = np.stack(self._captured_vectors, axis=0)
+        stacked = np.stack(vectors, axis=0)
         mean_vec = np.mean(stacked, axis=0).astype(np.float32)
         norm = float(np.linalg.norm(mean_vec))
         if norm <= 1e-6 or not np.isfinite(norm):
             return None
-
         normalized = mean_vec / norm
+        return [float(x) for x in normalized]
+
+    def build_entry_from_captured(self) -> Optional[CustomPoseEntry]:
+        """Average and L2-normalize captured body/face vectors into a CustomPoseEntry."""
+        include_face = self._include_face_chk.isChecked()
+        body_list = self._average_and_normalize(self._captured_vectors)
+        face_list = self._average_and_normalize(self._captured_face_vectors) if include_face else None
+
+        if include_face:
+            if face_list is None:
+                return None
+        elif body_list is None:
+            return None
+
         name = self._name_edit.text().strip() or "Custom Pose"
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.upper()).strip("_") or "CUSTOM"
         pose_id = f"CUSTOM_{slug[:16]}_{uuid.uuid4().hex[:6].upper()}"
@@ -401,10 +461,12 @@ class RecorderDialog(QDialog):
         return CustomPoseEntry(
             id=pose_id,
             name=name,
-            vector=[float(x) for x in normalized],
+            vector=body_list if body_list is not None else [],
             meme_path=meme_path,
             audio_path=audio_path,
             threshold=float(self._threshold_spin.value()),
+            include_face=include_face,
+            face_vector=face_list,
         )
 
     def get_recorded_entry(self) -> Optional[CustomPoseEntry]:

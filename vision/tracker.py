@@ -43,6 +43,7 @@ class FrameDetection:
     hands: list[tuple[str, np.ndarray]] = field(default_factory=list)  # (label in {"Left", "Right"}, (21, 3) float32)
     face: Optional[np.ndarray] = None  # shape (N, 3) float32, N >= 468
     timestamp_ms: int = 0
+    face_blendshapes: Optional[dict[str, float]] = None
 
 
 def _parse_version_tuple(ver: str) -> tuple[int, ...]:
@@ -225,6 +226,7 @@ class MediaPipeLandmarker:
                     min_face_detection_confidence=0.5,
                     min_face_presence_confidence=0.5,
                     min_tracking_confidence=0.5,
+                    output_face_blendshapes=True,
                 )
             )
         elif self.backend == "solutions":
@@ -262,6 +264,7 @@ class MediaPipeLandmarker:
         pose_arr: Optional[np.ndarray] = None
         hands_list: list[tuple[str, np.ndarray]] = []
         face_arr: Optional[np.ndarray] = None
+        face_blendshapes: Optional[dict[str, float]] = None
 
         if self.backend == "tasks":
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_contig)
@@ -287,6 +290,14 @@ class MediaPipeLandmarker:
                     arr = _landmarks_to_xyz_array(face_res.face_landmarks[0])
                     if arr.shape[0] >= 468:
                         face_arr = arr
+                if getattr(face_res, "face_blendshapes", None):
+                    bs_cats = face_res.face_blendshapes[0]
+                    if bs_cats:
+                        face_blendshapes = {
+                            cat.category_name: float(cat.score)
+                            for cat in bs_cats
+                            if cat.category_name is not None and cat.score is not None
+                        }
 
         elif self.backend == "solutions":
             if self._pose_sol is not None:
@@ -318,6 +329,7 @@ class MediaPipeLandmarker:
             hands=hands_list,
             face=face_arr,
             timestamp_ms=ts,
+            face_blendshapes=face_blendshapes,
         )
 
     def close(self) -> None:

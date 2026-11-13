@@ -20,6 +20,7 @@ DEFAULT_AUDIO_FILES: tuple[str, ...] = (
     "erm_actually.wav",
     "domain_pulse.wav",
     "peace_chime.wav",
+    "sigma_rizz.wav",
 )
 
 
@@ -195,6 +196,33 @@ def _synth_peace_chime(sr: int = SAMPLE_RATE) -> np.ndarray:
     return np.tanh(out * 1.15) * 0.82
 
 
+def _synth_sigma_rizz(sr: int = SAMPLE_RATE) -> np.ndarray:
+    """Deep punchy bass/phonk-style synth pulse."""
+    dur = 0.96
+    n_total = int(sr * dur)
+    out = np.zeros(n_total, dtype=np.float64)
+
+    # Double 808-style phonk bass + metallic cowbell pulse
+    for start_s, base_f, cow_f in ((0.0, 52.0, 554.37), (0.34, 46.0, 622.25)):
+        i0 = int(start_s * sr)
+        t = np.arange(n_total - i0, dtype=np.float64) / sr
+        kick_f = base_f + 85.0 * np.exp(-26.0 * t)
+        kick_ph = 2.0 * np.pi * np.cumsum(kick_f) / sr
+        sub = np.sin(kick_ph) + 0.38 * np.sin(2.0 * kick_ph)
+        sub_env = (1.0 - np.exp(-180.0 * t)) * np.exp(-4.8 * t)
+
+        # Phonk cowbell (inharmonic square-like pair)
+        cow = (
+            0.55 * np.sin(2.0 * np.pi * cow_f * t)
+            + 0.45 * np.sin(2.0 * np.pi * (cow_f * 1.498) * t)
+            + 0.20 * np.sin(2.0 * np.pi * (cow_f * 3.0) * t)
+        )
+        cow_env = (1.0 - np.exp(-240.0 * t)) * np.exp(-11.5 * t)
+        out[i0:] += 0.78 * sub * sub_env + 0.30 * np.tanh(cow * 1.6) * cow_env
+
+    return np.tanh(out * 1.85) * 0.86
+
+
 _SYNTH_MAP: dict[str, Callable[[int], np.ndarray]] = {
     "vine_boom.wav": _synth_vine_boom,
     "dramatic_hit.wav": _synth_dramatic_hit,
@@ -202,6 +230,7 @@ _SYNTH_MAP: dict[str, Callable[[int], np.ndarray]] = {
     "erm_actually.wav": _synth_erm_actually,
     "domain_pulse.wav": _synth_domain_pulse,
     "peace_chime.wav": _synth_peace_chime,
+    "sigma_rizz.wav": _synth_sigma_rizz,
 }
 
 

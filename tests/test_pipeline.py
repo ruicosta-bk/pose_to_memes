@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import mediapipe as mp
 import numpy as np
 from PIL import Image
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from assets import (
@@ -42,6 +43,7 @@ EXPECTED_PNG_NAMES = {
     "shocked.png",
     "domain_expansion.png",
     "peace_sign.png",
+    "sigma_rizz.png",
     "neutral.png",
 }
 
@@ -65,6 +67,7 @@ def test_ensure_default_assets_idempotent_and_valid(tmp_path: Path) -> None:
 
     # All default WAVs exist and have valid RIFF/PCM frames
     wav_names = {p.name for p in default_dir.glob("*.wav")}
+    assert "sigma_rizz.wav" in DEFAULT_AUDIO_FILES
     assert set(DEFAULT_AUDIO_FILES).issubset(wav_names)
     for name in DEFAULT_AUDIO_FILES:
         with wave.open(str(default_dir / name), "rb") as wf:
@@ -91,6 +94,15 @@ def test_ensure_default_assets_idempotent_and_valid(tmp_path: Path) -> None:
     Image.new("RGB", (32, 32), color=(255, 0, 255)).save(override_gif, format="GIF")
     overridden = resolve_pose_media("ABSOLUTE_CINEMA", cfg, root_dir=tmp_path)
     assert overridden["meme_path"] == str(override_gif)
+
+    # SIGMA_RIZZ default fallback -> override -> fallback
+    sigma_default = resolve_pose_media("SIGMA_RIZZ", cfg, root_dir=tmp_path)
+    assert sigma_default["meme_path"] == str(default_dir / "sigma_rizz.png")
+    assert sigma_default["audio_path"] == str(default_dir / "sigma_rizz.wav")
+    sigma_override = tmp_path / "assets" / "memes" / "SIGMA_RIZZ.jpg"
+    Image.new("RGB", (32, 32), color=(255, 128, 0)).save(sigma_override, format="JPEG")
+    sigma_resolved = resolve_pose_media("SIGMA_RIZZ", cfg, root_dir=tmp_path)
+    assert sigma_resolved["meme_path"] == str(sigma_override)
 
 
 def test_vision_overlay_hud_and_pip() -> None:
@@ -164,25 +176,70 @@ def test_headless_ui_smoke(tmp_path: Path) -> None:
     stage.cleanup()
     stage.close()
 
-    # 2. RecorderDialog capture flow with synthetic FrameDetection
+    # 2. RecorderDialog capture flow with synthetic FrameDetection (body & face-only)
     recorder = RecorderDialog()
+    assert recorder._include_face_chk.isChecked() is False
     recorder._name_edit.setText("Smoke Pose")
     pose, hands, face = build_pose_sample("PEACE_SIGN")
     det = FrameDetection(pose=pose, hands=hands, face=face, timestamp_ms=500)
+    assert det.face_blendshapes is None
     recorder._phase = "capturing"
     recorder.on_frame(np.zeros((240, 320, 3), dtype=np.uint8), det, 30.0)
     recorder._finish_capture()
     entry = recorder.get_recorded_entry()
     assert entry is not None
     assert entry.name == "Smoke Pose"
+    assert entry.include_face is False
     assert len(entry.vector) == 150
     recorder.close()
+
+    # RecorderDialog with Include Face Expression checked (face-only & rejection when absent)
+    face_rec = RecorderDialog()
+    face_rec._name_edit.setText("Face Only Smirk")
+    face_rec._include_face_chk.setChecked(True)
+    face_rec._phase = "capturing"
+    face_rec.on_frame(
+        np.zeros((240, 320, 3), dtype=np.uint8),
+        FrameDetection(pose=None, hands=[], face=None, face_blendshapes=None, timestamp_ms=520),
+        30.0,
+    )
+    face_rec._finish_capture()
+    assert face_rec.get_recorded_entry() is None
+    status_low = face_rec._status_label.text().lower()
+    assert "capture failed" in status_low and "blendshapes" in status_low
+
+    rizz_bs = {
+        "mouthPucker": 0.70,
+        "eyeSquintLeft": 0.55,
+        "eyeSquintRight": 0.52,
+        "browOuterUpLeft": 0.65,
+        "jawOpen": 0.04,
+    }
+    face_rec._phase = "capturing"
+    face_rec.on_frame(
+        np.zeros((240, 320, 3), dtype=np.uint8),
+        FrameDetection(pose=None, hands=[], face=None, face_blendshapes=rizz_bs, timestamp_ms=540),
+        30.0,
+    )
+    face_rec._finish_capture()
+    face_entry = face_rec.get_recorded_entry()
+    assert face_entry is not None
+    assert face_entry.include_face is True
+    assert face_entry.vector == []
+    assert face_entry.face_vector is not None and len(face_entry.face_vector) == 51
+    face_rec.close()
 
     # 3. MainWindow full pipeline smoke test via build_studio + synthetic frames
     window: MainWindow = build_studio(tmp_path, probe_cameras=False)
     window.audio_player.set_muted(True)
     window.show()
     app.processEvents()
+
+    pose_ids = [
+        window._pose_list.item(i).data(Qt.ItemDataRole.UserRole)
+        for i in range(window._pose_list.count())
+    ]
+    assert "SIGMA_RIZZ" in pose_ids
 
     cinema_pose, cinema_hands, cinema_face = build_pose_sample("ABSOLUTE_CINEMA")
     frame = np.full((360, 480, 3), (18, 22, 32), dtype=np.uint8)
@@ -204,6 +261,40 @@ def test_headless_ui_smoke(tmp_path: Path) -> None:
     assert res2.active_pose == "ABSOLUTE_CINEMA"
     assert res2.triggered_pose == "ABSOLUTE_CINEMA"
     assert "ABSOLUTE CINEMA" in window._status_pill.text()
+
+    # Release back to neutral, then trigger SIGMA_RIZZ via face_blendshapes after cooldown
+    neutral_pose, neutral_hands, neutral_face = build_pose_sample("NEUTRAL")
+    window.handle_frame(
+        frame,
+        FrameDetection(pose=neutral_pose, hands=neutral_hands, face=neutral_face, timestamp_ms=400),
+        fps=60.0,
+    )
+    window.handle_frame(
+        frame,
+        FrameDetection(
+            pose=neutral_pose,
+            hands=neutral_hands,
+            face=neutral_face,
+            face_blendshapes=rizz_bs,
+            timestamp_ms=1300,
+        ),
+        fps=60.0,
+    )
+    res_rizz = window.handle_frame(
+        frame,
+        FrameDetection(
+            pose=neutral_pose,
+            hands=neutral_hands,
+            face=neutral_face,
+            face_blendshapes=rizz_bs,
+            timestamp_ms=1600,
+        ),
+        fps=60.0,
+    )
+    assert res_rizz is not None
+    assert res_rizz.active_pose == "SIGMA_RIZZ"
+    assert res_rizz.triggered_pose == "SIGMA_RIZZ"
+    assert "SIGMA RIZZ" in window._status_pill.text()
 
     app.processEvents()
     window.close()

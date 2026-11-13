@@ -35,6 +35,12 @@
     "audio_path": "assets/default/peace_chime.wav",
     "accent_color": "#06B6D4"
   },
+  "SIGMA_RIZZ": {
+    "title": "SIGMA RIZZ",
+    "meme_path": "assets/default/sigma_rizz.png",
+    "audio_path": "assets/default/sigma_rizz.wav",
+    "accent_color": "#F97316"
+  },
   "NEUTRAL": {
     "title": "WAITING FOR POSE...",
     "meme_path": "assets/default/neutral.png",

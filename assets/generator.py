@@ -30,6 +30,7 @@ POSE_ORDER: tuple[str, ...] = (
     "SHOCKED",
     "DOMAIN_EXPANSION",
     "PEACE_SIGN",
+    "SIGMA_RIZZ",
     "NEUTRAL",
 )
 
@@ -69,6 +70,12 @@ DEFAULT_MEMES_CONFIG: dict[str, dict[str, Optional[str]]] = {
         "meme_path": "assets/default/peace_sign.png",
         "audio_path": "assets/default/peace_chime.wav",
         "accent_color": "#06B6D4",
+    },
+    "SIGMA_RIZZ": {
+        "title": "SIGMA RIZZ",
+        "meme_path": "assets/default/sigma_rizz.png",
+        "audio_path": "assets/default/sigma_rizz.wav",
+        "accent_color": "#F97316",
     },
     "NEUTRAL": {
         "title": "WAITING FOR POSE...",
@@ -132,6 +139,15 @@ _CARD_SPECS: dict[str, dict[str, Any]] = {
         "bg_bot": (12, 28, 42),
         "accent": (6, 182, 212),
         "glow": (34, 211, 238),
+    },
+    "SIGMA_RIZZ": {
+        "filename": "sigma_rizz.png",
+        "title": "SIGMA RIZZ",
+        "badge": "POSE // RIZZ",
+        "bg_top": (22, 12, 10),
+        "bg_bot": (38, 18, 12),
+        "accent": (249, 115, 22),
+        "glow": (251, 146, 60),
     },
     "NEUTRAL": {
         "filename": "neutral.png",
@@ -563,6 +579,52 @@ def _draw_neutral(canvas: Image.Image, spec: dict[str, Any]) -> Image.Image:
     return Image.alpha_composite(canvas, layer)
 
 
+def _draw_sigma_rizz(canvas: Image.Image, spec: dict[str, Any]) -> Image.Image:
+    layer = Image.new("RGBA", (_CANVAS_W, _CANVAS_H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    cx, cy = _CANVAS_W // 2, 485
+    accent = spec["accent"]
+    glow = spec["glow"]
+
+    # Subtle diagonal speed/sigma energy slashes
+    for offset in (-260, -210, 210, 260):
+        d.line([(cx + offset - 80, cy + 200), (cx + offset + 80, cy - 200)], fill=(*accent, 55), width=6)
+
+    # Chiseled stylized jawline head silhouette
+    jaw_poly = [
+        (cx - 145, cy - 155),
+        (cx, cy - 210),
+        (cx + 145, cy - 155),
+        (cx + 150, cy + 15),
+        (cx + 95, cy + 130),
+        (cx, cy + 175),
+        (cx - 95, cy + 130),
+        (cx - 150, cy + 15),
+    ]
+    d.polygon(jaw_poly, fill=(28, 18, 16, 245), outline=(*glow, 255))
+    d.line(jaw_poly + [jaw_poly[0]], fill=(*glow, 255), width=8)
+
+    # Asymmetric "rizz" eyebrows (left raised arc, right sharp angled)
+    d.arc((cx - 115, cy - 130, cx - 22, cy - 68), start=190, end=345, fill=(248, 250, 252, 255), width=12)
+    d.line([(cx + 22, cy - 78), (cx + 115, cy - 102)], fill=(248, 250, 252, 255), width=12)
+
+    # Squinted intense eyes
+    for ex in (cx - 65, cx + 65):
+        d.rounded_rectangle((ex - 38, cy - 52, ex + 38, cy - 26), radius=12, fill=(248, 250, 252, 255))
+        d.ellipse((ex - 10, cy - 50, ex + 14, cy - 28), fill=(15, 23, 42, 255))
+        d.ellipse((ex + 2, cy - 46, ex + 10, cy - 38), fill=(*glow, 255))
+
+    # Pursed/smirk mouth
+    d.rounded_rectangle((cx - 34, cy + 52, cx + 44, cy + 74), radius=11, fill=(*glow, 245))
+    d.line([(cx - 48, cy + 68), (cx + 52, cy + 56)], fill=(248, 250, 252, 255), width=6)
+
+    # Sparkle glint diamonds
+    for sx, sy, sr in ((cx - 235, cy - 140, 34), (cx + 245, cy - 125, 42)):
+        d.polygon([(sx, sy - sr), (sx + sr // 2, sy), (sx, sy + sr), (sx - sr // 2, sy)], fill=(*glow, 245))
+
+    return Image.alpha_composite(canvas, layer)
+
+
 _ARTWORK_DRAWERS: dict[str, Callable[[Image.Image, dict[str, Any]], Image.Image]] = {
     "ABSOLUTE_CINEMA": _draw_absolute_cinema,
     "ERM_ACTUALLY": _draw_erm_actually,
@@ -570,6 +632,7 @@ _ARTWORK_DRAWERS: dict[str, Callable[[Image.Image, dict[str, Any]], Image.Image]
     "SHOCKED": _draw_shocked,
     "DOMAIN_EXPANSION": _draw_domain_expansion,
     "PEACE_SIGN": _draw_peace_sign,
+    "SIGMA_RIZZ": _draw_sigma_rizz,
     "NEUTRAL": _draw_neutral,
 }
 

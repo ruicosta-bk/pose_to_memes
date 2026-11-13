@@ -13,13 +13,17 @@ from typing import Any, Optional, Union
 
 import numpy as np
 
-from .features import cosine_similarity, extract_pose_vector
+from .features import (
+    cosine_similarity,
+    extract_face_blendshape_vector,
+    extract_pose_vector,
+)
 from .rules import classify_builtin
 
 
 @dataclass
 class CustomPoseEntry:
-    """Serialized custom pose template stored in ``data/custom_poses.json``."""
+    """Serialized custom pose/expression template stored in ``data/custom_poses.json``."""
 
     id: str
     name: str
@@ -27,19 +31,25 @@ class CustomPoseEntry:
     meme_path: str = ""
     audio_path: str = ""
     threshold: float = 0.88
+    include_face: bool = False
+    face_vector: Optional[list[float]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> CustomPoseEntry:
+        raw_fv = raw.get("face_vector")
+        face_vec = [float(x) for x in raw_fv] if raw_fv is not None else None
         return cls(
             id=str(raw["id"]),
             name=str(raw["name"]),
-            vector=[float(x) for x in raw["vector"]],
+            vector=[float(x) for x in raw.get("vector", [])],
             meme_path=str(raw.get("meme_path", "")),
             audio_path=str(raw.get("audio_path", "")),
             threshold=float(raw.get("threshold", 0.88)),
+            include_face=bool(raw.get("include_face", False)),
+            face_vector=face_vec,
         )
 
 
@@ -94,27 +104,50 @@ class CustomPoseStore:
         audio_path: str = "",
         threshold: float = 0.88,
         pose_id: Optional[str] = None,
+        include_face: bool = False,
+        face_vector: Optional[Union[np.ndarray, list[float]]] = None,
     ) -> CustomPoseEntry:
         """Add a custom pose (either from a ``CustomPoseEntry`` or raw fields) and persist."""
         if isinstance(name_or_entry, CustomPoseEntry):
+            raw_vec = name_or_entry.vector
+            raw_fv = name_or_entry.face_vector
+            inc_face = bool(name_or_entry.include_face)
+            vec_list = self._normalize_vector_list(raw_vec) if raw_vec else []
+            fv_list = self._normalize_vector_list(raw_fv) if raw_fv is not None else None
+            if not vec_list and not (inc_face and fv_list):
+                raise ValueError("CustomPoseEntry must provide body vector or face_vector")
             entry = CustomPoseEntry(
                 id=name_or_entry.id or f"CUSTOM_{uuid.uuid4().hex[:8].upper()}",
                 name=name_or_entry.name,
-                vector=self._normalize_vector_list(name_or_entry.vector),
+                vector=vec_list,
                 meme_path=name_or_entry.meme_path,
                 audio_path=name_or_entry.audio_path,
                 threshold=float(name_or_entry.threshold),
+                include_face=inc_face,
+                face_vector=fv_list,
             )
         else:
+            fv_list = self._normalize_vector_list(face_vector) if face_vector is not None else None
             if vector is None:
-                raise ValueError("vector must be provided when adding a pose by name")
+                if include_face and fv_list:
+                    vec_list = []
+                else:
+                    raise ValueError(
+                        "vector must be provided when adding a pose by name "
+                        "(unless include_face=True with face_vector)"
+                    )
+            else:
+                vec_list = self._normalize_vector_list(vector)
+
             entry = CustomPoseEntry(
                 id=pose_id or f"CUSTOM_{uuid.uuid4().hex[:8].upper()}",
                 name=str(name_or_entry),
-                vector=self._normalize_vector_list(vector),
+                vector=vec_list,
                 meme_path=str(meme_path),
                 audio_path=str(audio_path),
                 threshold=float(threshold),
+                include_face=bool(include_face),
+                face_vector=fv_list,
             )
 
         self._entries = [e for e in self._entries if e.id != entry.id]
@@ -145,6 +178,8 @@ class CustomPoseStore:
         meme_path: Optional[str] = None,
         audio_path: Optional[str] = None,
         threshold: Optional[float] = None,
+        include_face: Optional[bool] = None,
+        face_vector: Optional[Union[np.ndarray, list[float]]] = None,
     ) -> Optional[CustomPoseEntry]:
         entry = self.get_pose(pose_id)
         if entry is None:
@@ -157,24 +192,70 @@ class CustomPoseStore:
             entry.audio_path = str(audio_path)
         if threshold is not None:
             entry.threshold = float(threshold)
+        if include_face is not None:
+            entry.include_face = bool(include_face)
+        if face_vector is not None:
+            entry.face_vector = self._normalize_vector_list(face_vector)
         self.save()
         return entry
 
     def list_poses(self) -> list[CustomPoseEntry]:
         return list(self._entries)
 
-    def score_all(self, vector: Optional[np.ndarray]) -> dict[str, float]:
-        """Return Cosine Similarity scores keyed by custom pose ID."""
-        if vector is None or not self._entries:
+    @staticmethod
+    def _score_entry(
+        entry: CustomPoseEntry,
+        vector: Optional[np.ndarray],
+        face_vector: Optional[np.ndarray],
+    ) -> float:
+        has_body = len(entry.vector) > 0
+        has_face = bool(entry.include_face and entry.face_vector)
+
+        if has_face:
+            if face_vector is None:
+                return 0.0
+            face_sim = cosine_similarity(
+                face_vector, np.asarray(entry.face_vector, dtype=np.float32)
+            )
+            if has_body:
+                body_sim = (
+                    cosine_similarity(vector, np.asarray(entry.vector, dtype=np.float32))
+                    if vector is not None
+                    else 0.0
+                )
+                return float(np.clip(0.35 * body_sim + 0.65 * face_sim, 0.0, 1.0))
+            return float(np.clip(face_sim, 0.0, 1.0))
+
+        if not has_body or vector is None:
+            return 0.0
+        return float(
+            np.clip(
+                cosine_similarity(vector, np.asarray(entry.vector, dtype=np.float32)),
+                0.0,
+                1.0,
+            )
+        )
+
+    def score_all(
+        self,
+        vector: Optional[np.ndarray],
+        face_vector: Optional[np.ndarray] = None,
+    ) -> dict[str, float]:
+        """Return similarity scores keyed by custom pose ID."""
+        if (vector is None and face_vector is None) or not self._entries:
             return {}
         return {
-            entry.id: cosine_similarity(vector, np.asarray(entry.vector, dtype=np.float32))
+            entry.id: self._score_entry(entry, vector, face_vector)
             for entry in self._entries
         }
 
-    def match(self, vector: Optional[np.ndarray]) -> tuple[Optional[CustomPoseEntry], float]:
+    def match(
+        self,
+        vector: Optional[np.ndarray],
+        face_vector: Optional[np.ndarray] = None,
+    ) -> tuple[Optional[CustomPoseEntry], float]:
         """Return ``(best_matching_entry, similarity)`` if above threshold, else ``(None, best_sim)``."""
-        if vector is None or not self._entries:
+        if (vector is None and face_vector is None) or not self._entries:
             return None, 0.0
 
         best_qualified: Optional[CustomPoseEntry] = None
@@ -182,7 +263,7 @@ class CustomPoseStore:
         best_overall_sim = -1.0
 
         for entry in self._entries:
-            sim = cosine_similarity(vector, np.asarray(entry.vector, dtype=np.float32))
+            sim = self._score_entry(entry, vector, face_vector)
             if sim > best_overall_sim:
                 best_overall_sim = sim
             if sim >= entry.threshold and sim > best_qualified_sim:
@@ -261,6 +342,7 @@ class TemporalStabilizer:
             hands=getattr(detection, "hands", None),
             face=getattr(detection, "face", None),
             timestamp_ms=getattr(detection, "timestamp_ms", None),
+            face_blendshapes=getattr(detection, "face_blendshapes", None),
         )
 
     def update(
@@ -269,20 +351,24 @@ class TemporalStabilizer:
         hands: Optional[list[tuple[str, np.ndarray]]] = None,
         face: Optional[np.ndarray] = None,
         timestamp_ms: Optional[int] = None,
+        face_blendshapes: Optional[dict[str, float]] = None,
     ) -> PipelineResult:
         """Classify current frame and apply temporal stabilization."""
         now_ms = int(time.monotonic() * 1000) if timestamp_ms is None else int(timestamp_ms)
 
-        builtin_pose, builtin_conf, builtin_scores = classify_builtin(pose, hands, face)
+        builtin_pose, builtin_conf, builtin_scores = classify_builtin(
+            pose, hands, face, face_blendshapes=face_blendshapes
+        )
         all_scores = dict(builtin_scores)
 
         custom_entry: Optional[CustomPoseEntry] = None
         custom_sim = 0.0
         if self.custom_store is not None:
             vec = extract_pose_vector(pose, hands)
-            custom_scores = self.custom_store.score_all(vec)
+            face_vec = extract_face_blendshape_vector(face_blendshapes)
+            custom_scores = self.custom_store.score_all(vec, face_vector=face_vec)
             all_scores.update(custom_scores)
-            custom_entry, custom_sim = self.custom_store.match(vec)
+            custom_entry, custom_sim = self.custom_store.match(vec, face_vector=face_vec)
 
         if custom_entry is not None:
             cand_pose: Optional[str] = custom_entry.id

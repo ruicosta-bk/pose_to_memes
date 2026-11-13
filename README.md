@@ -12,16 +12,16 @@ Strike classic meme poses—or record your own custom poses in 3 seconds—to tr
   - `draw_neon_hud` renders a neon skeleton overlay across body, hands, and facial contours.
   - `composite_pip` overlays the active meme (including live animated GIF frames and BGRA alpha images) onto the webcam feed.
 - **Two-Tier Pose Classification & Stabilization (`classifier/`)**:
-  - **Tier 1 (Rule-Based Geometry)**: `ABSOLUTE_CINEMA`, `ERM_ACTUALLY`, `THINKING`, `SHOCKED`, `DOMAIN_EXPANSION`, and `PEACE_SIGN`.
-  - **Tier 2 (Custom Pose Recorder)**: Scale- and translation-invariant 150-D pose/hand feature vector (`extract_pose_vector`) matched via Cosine Similarity (`CustomPoseStore`, persisted in `data/custom_poses.json`).
+  - **Tier 1 (Rule-Based Geometry + Face Blendshapes)**: 7 built-in poses — `ABSOLUTE_CINEMA`, `ERM_ACTUALLY`, `THINKING`, `SHOCKED`, `DOMAIN_EXPANSION`, `PEACE_SIGN`, and `SIGMA_RIZZ` (using MediaPipe ARKit face blendshapes with FaceMesh landmark fallback).
+  - **Tier 2 (Custom Pose & Face Expression Recorder)**: Scale- and translation-invariant 150-D body/hand vector (`extract_pose_vector`) and optional 51-D ARKit face blendshape vector (`extract_face_blendshape_vector`, supporting body-only, face-only, or combined body+face matching) matched via Cosine Similarity (`CustomPoseStore`, persisted in `data/custom_poses.json`).
   - **Temporal Stabilizer (`TemporalStabilizer` / `PosePipeline`)**: EMA-smoothed confidence bar, 250 ms hold debounce, trigger/release hysteresis, and cooldown anti-flicker protection.
 - **Procedural Assets & Audio (`assets/`)**:
   - `ensure_default_assets` idempotently generates 800×600 PNG meme cards and 44.1 kHz mono `.wav` SFX into `assets/default/` and `data/memes_config.json`.
-  - Drop user overrides into `assets/memes/` (e.g., `ABSOLUTE_CINEMA.gif`, `SHOCKED.png`, `PEACE_SIGN.wav`) to override built-in media without editing code.
+  - Drop user overrides into `assets/memes/` (e.g., `ABSOLUTE_CINEMA.gif`, `SIGMA_RIZZ.jpg`, `SHOCKED.png`, `PEACE_SIGN.wav`) to override built-in media without editing code.
 - **Dark-Mode Studio UI (`ui/`, `main.py`)**:
   - Live webcam view, camera selector, Start/Stop, Neon HUD, Mirror, PiP, and optional `pyvirtualcam` (OBS Virtual Camera) toggles.
   - `MemeStageWidget` with static image + animated GIF playback and fade transitions.
-  - `RecorderDialog` with 3-second countdown and ~0.55 s pose vector averaging.
+  - `RecorderDialog` with 3-second countdown, ~0.55 s vector averaging, and an **Include Face Expression (Blendshapes)** toggle for recording custom facial expressions or body+face combos.
 
 ## Setup (Windows / Python 3.12)
 
@@ -71,8 +71,8 @@ Pose-to-Meme/
 │   ├── default/             # Auto-generated default PNG cards & WAV SFX
 │   └── memes/               # User media overrides (e.g. ABSOLUTE_CINEMA.gif)
 ├── classifier/
-│   ├── features.py          # Translation/scale-invariant 150-D vector & cosine_similarity
-│   ├── rules.py             # Tier 1 geometric rules for 6 built-in meme poses
+│   ├── features.py          # Translation/scale-invariant 150-D body + 51-D face vectors
+│   ├── rules.py             # Tier 1 geometric + blendshape rules for 7 built-in meme poses
 │   └── custom_store.py      # Tier 2 CustomPoseStore & TemporalStabilizer / PosePipeline
 ├── data/
 │   └── memes_config.json    # Pose-to-media/audio/accent mapping

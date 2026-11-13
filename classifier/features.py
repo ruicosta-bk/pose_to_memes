@@ -1,4 +1,4 @@
-"""Scale- and translation-invariant pose & hand feature extraction."""
+"""Scale- and translation-invariant pose, hand, and face blendshape feature extraction."""
 
 from __future__ import annotations
 
@@ -11,6 +11,62 @@ RIGHT_SHOULDER = 12
 POSE_LANDMARK_COUNT = 33
 HAND_LANDMARK_COUNT = 21
 POSE_VECTOR_DIM = (POSE_LANDMARK_COUNT + 2 * HAND_LANDMARK_COUNT) * 2
+
+FACE_BLENDSHAPE_KEYS: tuple[str, ...] = (
+    "browDownLeft",
+    "browDownRight",
+    "browInnerUp",
+    "browOuterUpLeft",
+    "browOuterUpRight",
+    "cheekPuff",
+    "cheekSquintLeft",
+    "cheekSquintRight",
+    "eyeBlinkLeft",
+    "eyeBlinkRight",
+    "eyeLookDownLeft",
+    "eyeLookDownRight",
+    "eyeLookInLeft",
+    "eyeLookInRight",
+    "eyeLookOutLeft",
+    "eyeLookOutRight",
+    "eyeLookUpLeft",
+    "eyeLookUpRight",
+    "eyeSquintLeft",
+    "eyeSquintRight",
+    "eyeWideLeft",
+    "eyeWideRight",
+    "jawForward",
+    "jawLeft",
+    "jawOpen",
+    "jawRight",
+    "mouthClose",
+    "mouthDimpleLeft",
+    "mouthDimpleRight",
+    "mouthFrownLeft",
+    "mouthFrownRight",
+    "mouthFunnel",
+    "mouthLeft",
+    "mouthLowerDownLeft",
+    "mouthLowerDownRight",
+    "mouthPressLeft",
+    "mouthPressRight",
+    "mouthPucker",
+    "mouthRight",
+    "mouthRollLower",
+    "mouthRollUpper",
+    "mouthShrugLower",
+    "mouthShrugUpper",
+    "mouthSmileLeft",
+    "mouthSmileRight",
+    "mouthStretchLeft",
+    "mouthStretchRight",
+    "mouthUpperUpLeft",
+    "mouthUpperUpRight",
+    "noseSneerLeft",
+    "noseSneerRight",
+)
+FACE_VECTOR_DIM = len(FACE_BLENDSHAPE_KEYS)
+MIN_FACE_BLENDSHAPE_NORM = 0.12
 
 # Weight upper-body & arm joints (13..22) while zeroing redundant head (1..10)
 # and noisy/off-screen lower-body (25..32) landmarks so distinct poses separate cleanly.
@@ -90,6 +146,32 @@ def extract_pose_vector(
         return None
 
     return (vec / norm).astype(np.float32, copy=False)
+
+
+def extract_face_blendshape_vector(
+    face_blendshapes: Optional[dict[str, float]],
+) -> Optional[np.ndarray]:
+    """Extract an L2-normalized 1D float32 vector over ``FACE_BLENDSHAPE_KEYS``.
+
+    Returns ``None`` if ``face_blendshapes`` is ``None`` or its raw L2 norm is
+    below ``MIN_FACE_BLENDSHAPE_NORM`` (0.12) so a neutral resting face does
+    not produce spurious matches.
+    """
+    if not face_blendshapes:
+        return None
+
+    vec = np.array(
+        [float(face_blendshapes.get(key, 0.0)) for key in FACE_BLENDSHAPE_KEYS],
+        dtype=np.float32,
+    )
+    if not np.all(np.isfinite(vec)):
+        return None
+
+    raw_norm = float(np.linalg.norm(vec))
+    if raw_norm < MIN_FACE_BLENDSHAPE_NORM:
+        return None
+
+    return (vec / raw_norm).astype(np.float32, copy=False)
 
 
 def cosine_similarity(
